@@ -5,187 +5,118 @@ import requests
 from io import StringIO
 
 # ================= 核心配置区 =================
-
-# 1. 设置数据源 (固定 IP)
 DATA_SOURCE = "http://43.156.132.4:8080/oi_analysis.csv"
-
+ITEMS_PER_PAGE = 20  
+MAX_TOTAL_ITEMS = 100 
 # ============================================
 
 def format_money(num):
-    """将数字格式化为 B/M/K"""
     try:
         num = float(num)
         if num >= 1_000_000_000: return f"{num/1_000_000_000:.2f}B"
         if num >= 1_000_000: return f"{num/1_000_000:.2f}M"
-        if num >= 1_000: return f"{num/1_000:.0f}K"
-        return f"{num:.0f}"
+        if num >= 1_000: return f"{num/1_000:.1f}K"
+        return f"{num:.1f}"
     except:
         return str(num)
 
 def load_data(url):
-    """从远程 URL 加载 CSV 数据"""
     try:
         response = requests.get(url, timeout=5)
-        if response.status_code != 200:
-            st.error(f"❌ 无法连接服务器，状态码: {response.status_code}")
-            return pd.DataFrame()
-        
-        try:
-            content = response.content.decode('utf-8-sig')
-        except:
-            content = response.content.decode('gbk')
-            
-        df = pd.read_csv(StringIO(content))
-        return df
-    except Exception as e:
-        st.error(f"❌ 数据加载失败: {e}")
+        if response.status_code != 200: return pd.DataFrame()
+        content = response.content.decode('utf-8-sig')
+        return pd.read_csv(StringIO(content))
+    except:
         return pd.DataFrame()
 
-def render_tradingview_widget(symbol, height=450):
-    """渲染 TradingView 组件"""
+def render_tradingview_widget(symbol, height=500):
     clean_symbol = symbol.upper().strip()
     tv_symbol = f"BINANCE:{clean_symbol}.P"
     container_id = f"tv_{clean_symbol}"
-
-    # 在 studies 列表中增加了多空比指标
     html_code = f"""
     <div class="tradingview-widget-container" style="height: {height}px; width: 100%;">
       <div id="{container_id}" style="height: 100%; width: 100%;"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
-      new TradingView.widget(
-      {{
-        "autosize": true,
-        "symbol": "{tv_symbol}",
-        "interval": "60",
-        "timezone": "Asia/Shanghai",
-        "theme": "light",
-        "style": "1",
-        "locale": "zh_CN",
-        "enable_publishing": false,
-        "hide_top_toolbar": true,
-        "hide_legend": false,
-        "save_image": false,
+      new TradingView.widget({{
+        "autosize": true, "symbol": "{tv_symbol}", "interval": "60",
+        "timezone": "Asia/Shanghai", "theme": "light", "style": "1",
+        "locale": "zh_CN", "enable_publishing": false, "hide_top_toolbar": true,
         "container_id": "{container_id}",
-        "studies": [
-            "MASimple@tv-basicstudies",     
-            "STD;Fund_crypto_open_interest",
-        ],
-        "disabled_features": [
-            "header_symbol_search", "header_compare", "use_localstorage_for_settings", 
-            "display_market_status", "timeframes_toolbar", "volume_force_overlay",
-            "header_chart_type", "header_settings", "header_indicators"
-        ]
-      }}
-      );
+        "studies": ["MASimple@tv-basicstudies", "STD;Fund_crypto_open_interest", "STD;Fund_long_short_ratio"],
+        "disabled_features": ["header_symbol_search", "header_compare", "use_localstorage_for_settings", "timeframes_toolbar", "volume_force_overlay"]
+      }});
       </script>
     </div>
     """
     components.html(html_code, height=height, scrolling=False)
 
 def main():
-    st.set_page_config(layout="wide", page_title="OI 异动监控")
-    st.title("🚀 主力建仓监控 (OI增幅 > 3%)")
+    st.set_page_config(layout="wide", page_title="主力建仓前100榜单")
+    st.title("🚀 主力建仓监控 Top 100")
 
-    # 1. 加载数据
     with st.spinner("正在获取最新数据..."):
         df = load_data(DATA_SOURCE)
     
     if df.empty:
+        st.error("数据加载失败。")
         return
 
-    # 2. 数据清洗与筛选
-    if 'increase_ratio' not in df.columns:
-        st.error("数据缺失 'increase_ratio' 列")
+    try:
+        # 计算逻辑：(最新OI - 三天最小OI) * 价格
+        if 'open_interest' in df.columns and 'oi_min_3d' in df.columns:
+            df['oi_delta_value'] = (df['open_interest'] - df['oi_min_3d']) * df['price']
+        else:
+            df['oi_delta_value'] = df.get('increase_amount_usdt', 0)
+
+        filtered_df = df[df['increase_ratio'] > 0.03].copy()
+        filtered_df = filtered_df.sort_values(by='oi_delta_value', ascending=False).head(MAX_TOTAL_ITEMS)
+        
+        if 'circ_supply' in filtered_df.columns:
+            filtered_df['market_cap'] = filtered_df['circ_supply'] * filtered_df['price']
+    except Exception as e:
+        st.error(f"处理错误: {e}")
         return
 
-    filtered_df = df[df['increase_ratio'] > 0.03].copy()
-    
-    if 'circ_supply' in filtered_df.columns and 'price' in filtered_df.columns:
-        filtered_df['market_cap'] = filtered_df['circ_supply'] * filtered_df['price']
-    else:
-        filtered_df['market_cap'] = 0
+    actual_total = len(filtered_df)
+    total_pages = max(1, (actual_total + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
 
-    filtered_df = filtered_df.sort_values(by='increase_ratio', ascending=False)
-
-    # 3. 分页逻辑准备
-    total_items = len(filtered_df)
-    ITEMS_PER_PAGE = 20
-    total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
-
-    # --- 顶部控制栏 (仅保留刷新和统计) ---
-    c1, c2 = st.columns([1, 5])
-    with c1:
-        if st.button("🔄 刷新数据", type="primary", use_container_width=True):
-            st.rerun()
-    with c2:
-        st.markdown(f"<div style='padding-top:7px;'><b>共发现 {total_items} 个标的，分为 {total_pages} 页显示</b></div>", unsafe_allow_html=True)
-    
-    st.markdown("---")
-
-    # 获取当前页码 (使用 Session State 确保翻页流畅)
     if 'page' not in st.session_state:
         st.session_state.page = 1
 
-    # 4. 显示内容
-    if filtered_df.empty:
-        st.info("😴 当前市场平淡，没有 OI 增幅超过 3% 的合约。")
-        return
-
-    # 切片数据
     start_idx = (st.session_state.page - 1) * ITEMS_PER_PAGE
-    end_idx = min(start_idx + ITEMS_PER_PAGE, total_items)
+    end_idx = min(start_idx + ITEMS_PER_PAGE, actual_total)
     current_batch = filtered_df.iloc[start_idx:end_idx]
 
-    # Grid 布局
     cols = st.columns(2)
-    
     for i, (_, row) in enumerate(current_batch.iterrows()):
         with cols[i % 2]:
             symbol = row['symbol']
-            ratio_pct = row['increase_ratio'] * 100
-            inc_val_str = format_money(row['increase_amount_usdt'])
-            supply_str = format_money(row.get('circ_supply', 0))
-            mcap_str = format_money(row.get('market_cap', 0))
-
+            rank = start_idx + i + 1
             st.markdown(f"""
-            <div style="background-color:#f8f9fa; padding:12px; border-radius:8px; border:1px solid #e0e0e0; margin-bottom:10px;">
-                <div style="display:flex; align-items:center; margin-bottom: 8px;">
-                    <span style="font-size:1.3em; font-weight:bold; color:#000; margin-right: 30px;">{symbol}</span>
-                    <span style="font-size:1.2em; font-weight:900; color:#d32f2f; background-color:#ffebee; padding:2px 10px; border-radius:4px;">+{ratio_pct:.2f}%</span>
+            <div style="background-color:#ffffff; padding:15px; border-radius:10px; border:1px solid #e0e0e0; margin-bottom:10px;">
+                <div style="display:flex; justify-content: space-between; align-items: center;">
+                    <div><span style="font-size:1.4em; font-weight:bold; color:#d32f2f;">#{rank}</span>
+                    <span style="font-size:1.4em; font-weight:bold; margin-left:10px;">{symbol}</span></div>
+                    <span style="font-size:1.1em; font-weight:900; color:#d32f2f; background-color:#ffebee; padding:3px 12px; border-radius:6px;">OI +{row['increase_ratio']*100:.2f}%</span>
                 </div>
-                <div style="display:flex; flex-wrap:wrap; align-items:center; font-size:0.95em; color:#424242; gap: 35px;">
-                    <span><b>OI增资:</b> <span style="color:#d32f2f;">+${inc_val_str}</span></span>
-                    <span><b>流通量:</b> {supply_str}</span>
-                    <span><b>市值:</b> <span style="color:#1976d2;">${mcap_str}</span></span>
+                <div style="margin-top:10px; display:flex; gap:30px; font-size:0.95em; color:#444;">
+                    <span>🔥 <b>3日增量市值:</b> <span style="color:#d32f2f;">${format_money(row['oi_delta_value'])}</span></span>
+                    <span>🌍 <b>流通市值:</b> ${format_money(row.get('market_cap', 0))}</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            
-            render_tradingview_widget(symbol, height=450) # 略微增加高度以容纳新指标
-            st.markdown("<div style='margin-bottom: 30px;'></div>", unsafe_allow_html=True)
+            render_tradingview_widget(symbol)
 
-    # --- 底部控制栏 (翻页装置) ---
     st.markdown("---")
-    footer_c1, footer_c2, footer_c3 = st.columns([2, 1, 2])
-    with footer_c2:
+    _, footer_col, _ = st.columns([2, 1, 2])
+    with footer_col:
         if total_pages > 1:
-            new_page = st.number_input(
-                f"跳至页码 (1-{total_pages})", 
-                min_value=1, max_value=total_pages, 
-                value=st.session_state.page, 
-                key="page_input"
-            )
+            new_page = st.number_input(f"页码 (共 {total_pages} 页)", 1, total_pages, st.session_state.page)
             if new_page != st.session_state.page:
                 st.session_state.page = new_page
                 st.rerun()
-        else:
-            st.markdown("<p style='text-align:center;'>已显示全部数据</p>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
 
-
-if __name__ == "__main__":
-
-    main()
