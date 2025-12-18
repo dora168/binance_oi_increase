@@ -43,14 +43,14 @@ def render_tradingview_widget(symbol, height=500):
         "timezone": "Asia/Shanghai", "theme": "light", "style": "1",
         "locale": "zh_CN", "enable_publishing": false, "hide_top_toolbar": true,
         "container_id": "{container_id}",
-        "studies": ["MASimple@tv-basicstudies", "STD;Fund_crypto_open_interest"],   #, "STD;Fund_long_short_ratio"
+        "studies": ["MASimple@tv-basicstudies", "STD;Fund_crypto_open_interest"],
         "disabled_features": ["header_symbol_search", "header_compare", "use_localstorage_for_settings", "timeframes_toolbar", "volume_force_overlay"]
       }});
       </script>
     </div>
     """
     components.html(html_code, height=height, scrolling=False)
-
+#   #, "STD;Fund_long_short_ratio"
 def main():
     st.set_page_config(layout="wide", page_title="主力建仓前100榜单")
     st.title("🚀 主力建仓监控 Top 100")
@@ -119,5 +119,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
