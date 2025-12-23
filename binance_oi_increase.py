@@ -19,6 +19,17 @@ def format_money(num):
         return f"{num:.1f}"
     except:
         return str(num)
+@st.cache_data(ttl=60)  # <-- 核心修改：添加这行。ttl=60 表示每 60 秒才真正更新一次数据
+def load_data(url):
+    try:
+        # 增加超时容错
+        response = requests.get(url, timeout=10)
+        if response.status_code != 200: return pd.DataFrame()
+        content = response.content.decode('utf-8-sig')
+        return pd.read_csv(StringIO(content))
+    except:
+        return pd.DataFrame()
+
 
 def load_data(url):
     try:
@@ -143,4 +154,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
