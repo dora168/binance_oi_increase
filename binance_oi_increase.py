@@ -6,7 +6,7 @@ from io import StringIO
 
 # ================= 核心配置区 =================
 DATA_SOURCE = "http://43.156.132.4:8080/oi_analysis.csv"
-ITEMS_PER_PAGE = 10  
+ITEMS_PER_PAGE = 10  # 每页显示10个，平铺图表时性能较好
 MAX_TOTAL_ITEMS = 100 
 # ============================================
 
@@ -19,21 +19,10 @@ def format_money(num):
         return f"{num:.1f}"
     except:
         return str(num)
-@st.cache_data(ttl=60)  # <-- 核心修改：添加这行。ttl=60 表示每 60 秒才真正更新一次数据
+
+@st.cache_data(ttl=60)  # 核心缓存：每60秒更新一次
 def load_data(url):
     try:
-        # 增加超时容错
-        response = requests.get(url, timeout=10)
-        if response.status_code != 200: return pd.DataFrame()
-        content = response.content.decode('utf-8-sig')
-        return pd.read_csv(StringIO(content))
-    except:
-        return pd.DataFrame()
-
-
-def load_data(url):
-    try:
-        # 增加超时容错
         response = requests.get(url, timeout=10)
         if response.status_code != 200: return pd.DataFrame()
         content = response.content.decode('utf-8-sig')
@@ -71,25 +60,20 @@ def main():
         df = load_data(DATA_SOURCE)
     
     if df.empty:
-        st.error("无法加载数据，请检查服务器连接或日志。")
+        st.error("无法加载数据，请检查服务器连接。")
         return
 
     try:
-        # 1. 计算排序指标：(最新OI - 三天最小OI) * 价格
+        # 1. 计算排序指标
         if 'open_interest' in df.columns and 'oi_min_3d' in df.columns:
             df['oi_delta_value'] = (df['open_interest'] - df['oi_min_3d']) * df['price']
         else:
-            # 容错：如果缺少列则使用预设增量列
             df['oi_delta_value'] = df.get('increase_amount_usdt', 0)
 
-        # 2. 全市场排序（移除 > 0.03 的筛选条件）
-        # 我们保留一份副本以便操作
-        full_market_df = df.copy()
+        # 2. 排序并取 Top 100
+        sorted_df = df.sort_values(by='oi_delta_value', ascending=False).head(MAX_TOTAL_ITEMS)
         
-        # 3. 按增量市值降序排列并取前 100
-        sorted_df = full_market_df.sort_values(by='oi_delta_value', ascending=False).head(MAX_TOTAL_ITEMS)
-        
-        # 计算流通市值
+        # 3. 计算流通市值
         if 'circ_supply' in sorted_df.columns:
             sorted_df['market_cap'] = sorted_df['circ_supply'] * sorted_df['price']
         else:
@@ -109,8 +93,7 @@ def main():
     end_idx = min(start_idx + ITEMS_PER_PAGE, actual_total)
     current_batch = sorted_df.iloc[start_idx:end_idx]
 
-    # --- 顶栏统计 ---
-    st.info(f"💡 当前已按全市场持仓增量市值降序排列。已加载前 {actual_total} 名标的。")
+    st.info(f"💡 当前已按全市场持仓增量市值降序排列。每 60 秒自动刷新数据。")
 
     cols = st.columns(2)
     for i, (_, row) in enumerate(current_batch.iterrows()):
@@ -119,10 +102,10 @@ def main():
             rank = start_idx + i + 1
             oi_change_pct = row.get('increase_ratio', 0) * 100
             
-            # 动态颜色：增量为正则红，负则绿（针对全市场排名可能出现负值的情况）
             delta_color = "#d32f2f" if row['oi_delta_value'] >= 0 else "#2e7d32"
             bg_color = "#ffebee" if row['oi_delta_value'] >= 0 else "#e8f5e9"
 
+            # 重新加入了流通数量字段 (row.get('circ_supply'))
             st.markdown(f"""
             <div style="background-color:#ffffff; padding:15px; border-radius:10px; border:1px solid #e0e0e0; margin-bottom:10px;">
                 <div style="display:flex; justify-content: space-between; align-items: center;">
@@ -134,8 +117,9 @@ def main():
                         OI {oi_change_pct:+.2f}%
                     </span>
                 </div>
-                <div style="margin-top:10px; display:flex; gap:30px; font-size:0.95em; color:#444;">
-                    <span>🔥 <b>持仓增量市值:</b> <span style="color:{delta_color}; font-weight:bold;">${format_money(row['oi_delta_value'])}</span></span>
+                <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:20px; font-size:0.92em; color:#444;">
+                    <span>🔥 <b>增量市值:</b> <span style="color:{delta_color}; font-weight:bold;">${format_money(row['oi_delta_value'])}</span></span>
+                    <span>📦 <b>流通数量:</b> {format_money(row.get('circ_supply', 0))}</span>
                     <span>🌍 <b>流通市值:</b> ${format_money(row.get('market_cap', 0))}</span>
                 </div>
             </div>
@@ -154,5 +138,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
