@@ -6,7 +6,7 @@ from io import StringIO
 
 # ================= 核心配置区 =================
 DATA_SOURCE = "http://43.156.132.4:8080/oi_analysis.csv"
-ITEMS_PER_PAGE = 20  
+ITEMS_PER_PAGE = 10  
 MAX_TOTAL_ITEMS = 100 
 # ============================================
 
@@ -143,3 +143,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
